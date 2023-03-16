@@ -1,3 +1,4 @@
+local a = require'plenary.async'
 local cmp = require 'cmp'
 
 local NAME_REGEX = '\\%([^/\\\\:\\*?<>\'"`\\|]\\)'
@@ -116,8 +117,11 @@ source._dirname = function(self, params, option)
 end
 
 source._candidates = function(_, dirname, include_hidden, option, callback)
-  local fs, err = vim.loop.fs_scandir(dirname)
-  if err then
+  -- Scan directories in small batches, so that Neovim remains interactive on large directories.
+  local fs, err = vim.loop.fs_opendir(dirname,
+                                      nil,
+                                      option.max_traversed_entries)
+  if not fs then
     return callback(err, nil)
   end
 
@@ -129,13 +133,13 @@ source._candidates = function(_, dirname, include_hidden, option, callback)
     end
 
     local path = dirname .. '/' .. name
-    local stat = vim.loop.fs_stat(path)
+    local _, stat = a.uv.fs_stat(path)
     local lstat = nil
     if stat then
       fs_type = stat.type
     elseif fs_type == 'link' then
       -- Broken symlink
-      lstat = vim.loop.fs_lstat(dirname)
+      _, lstat = a.uv.fs_lstat(dirname)
       if not lstat then
         return
       end
@@ -170,20 +174,26 @@ source._candidates = function(_, dirname, include_hidden, option, callback)
     table.insert(items, item)
   end
 
-  local entry_count = 0
-  while option.max_traversed_entries == nil or entry_count < option.max_traversed_entries do
-    local name, fs_type, e = vim.loop.fs_scandir_next(fs)
-    if e then
-      return callback(fs_type, nil)
+  local function readdirs()
+    local entry_count = 0
+    while option.max_traversed_entries == nil or entry_count < option.max_traversed_entries do
+      local readdir_err, entries = a.uv.fs_readdir(fs)
+      if readdir_err then
+        return callback(err, nil)
+      end
+      if not entries then break end
+      for _, entry in pairs(entries) do
+        create_item(entry.name, entry.type)
+
+        entry_count = entry_count + 1
+        if option.max_traversed_entries and entry_count >= option.max_traversed_entries then
+          break
+        end
+      end
     end
-    if not name then
-      break
-    end
-    create_item(name, fs_type)
-    entry_count = entry_count + 1
   end
 
-  callback(nil, items)
+  a.run(function() readdirs() end, function() callback(nil, items) end)
 end
 
 source._is_slash_comment = function(_)
