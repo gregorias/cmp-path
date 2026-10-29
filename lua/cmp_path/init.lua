@@ -118,9 +118,9 @@ end
 
 source._candidates = function(_, dirname, include_hidden, option, callback)
   -- Scan directories in small batches, so that Neovim remains interactive on large directories.
-  local fs, err = vim.loop.fs_opendir(dirname,
-                                      nil,
-                                      option.max_traversed_entries)
+  local fs, err = (vim.uv or vim.loop).fs_opendir(dirname,
+                                               nil,
+                                               option.max_traversed_entries)
   if not fs then
     return callback(err, nil)
   end
